@@ -6,7 +6,7 @@
 #include <pthread.h>
 
 #define MAX_SENSORES 1000
-#define MAX_LINHAS 1000000  // reduzi pra não explodir memória
+#define MAX_LINHAS 1000000
 
 typedef struct {
     char id[15];
@@ -29,9 +29,15 @@ typedef struct {
     int inicio;
     int fim;
     LogEntry *logs;
-    SensorStats local_stats[MAX_SENSORES]; 
 } ThreadArgs;
 
+//  Estrutura global compartilhada
+SensorStats final_stats[MAX_SENSORES];
+
+//  Mutex global
+pthread_mutex_t mutex;
+
+// Função da thread COM mutex
 void* processar_bloco(void* arg) {
     ThreadArgs *data = (ThreadArgs*)arg;
 
@@ -39,7 +45,10 @@ void* processar_bloco(void* arg) {
         int idx = atoi(&data->logs[i].id[7]) - 1;
         if (idx < 0 || idx >= MAX_SENSORES) continue;
 
-        SensorStats *s = &data->local_stats[idx];
+        //  trava antes de acessar dado compartilhado
+        pthread_mutex_lock(&mutex);
+
+        SensorStats *s = &final_stats[idx];
 
         s->ativo = 1;
         strcpy(s->id, data->logs[i].id);
@@ -56,6 +65,9 @@ void* processar_bloco(void* arg) {
             strcmp(data->logs[i].status, "CRITICO") == 0) {
             s->total_alertas++;
         }
+
+        //  libera o mutex
+        pthread_mutex_unlock(&mutex);
     }
 
     return NULL;
@@ -108,10 +120,13 @@ int main(int argc, char *argv[]) {
 
     int chunk = total_lido / num_threads;
 
-    for (int i = 0; i < num_threads; i++) {
-        memset(t_args[i].local_stats, 0, sizeof(t_args[i].local_stats));
-    }
+    //  inicializa estrutura global
+    memset(final_stats, 0, sizeof(final_stats));
 
+    //  inicializa mutex
+    pthread_mutex_init(&mutex, NULL);
+
+    // Criação das threads
     for (int i = 0; i < num_threads; i++) {
         t_args[i].inicio = i * chunk;
         t_args[i].fim = (i == num_threads - 1) ? total_lido : (i + 1) * chunk;
@@ -124,23 +139,7 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
-    SensorStats final_stats[MAX_SENSORES] = {0};
-
-    for (int t = 0; t < num_threads; t++) {
-        for (int i = 0; i < MAX_SENSORES; i++) {
-            if (!t_args[t].local_stats[i].ativo) continue;
-
-            final_stats[i].ativo = 1;
-            strcpy(final_stats[i].id, t_args[t].local_stats[i].id);
-
-            final_stats[i].soma_temp += t_args[t].local_stats[i].soma_temp;
-            final_stats[i].soma_quadrados_temp += t_args[t].local_stats[i].soma_quadrados_temp;
-            final_stats[i].count_temp += t_args[t].local_stats[i].count_temp;
-            final_stats[i].energia_total += t_args[t].local_stats[i].energia_total;
-            final_stats[i].total_alertas += t_args[t].local_stats[i].total_alertas;
-        }
-    }
-
+    // RESULTADOS
     double maior_desvio = -1;
     char sensor_instavel[15] = "";
     double consumo_total = 0;
@@ -175,6 +174,9 @@ int main(int argc, char *argv[]) {
     printf("Total alertas: %d\n", alertas);
     printf("Consumo total: %.2f\n", consumo_total);
     printf("Tempo: %.4f segundos\n", tempo);
+
+    //  destrói mutex
+    pthread_mutex_destroy(&mutex);
 
     free(logs);
     free(threads);
