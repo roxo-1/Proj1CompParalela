@@ -1,3 +1,7 @@
+/*Integrantes:
+Carolina Lee 10440304
+Enrique Cipolla 10427824
+Pedro Gabriel Guimarães Fernandes 10437465*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
