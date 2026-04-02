@@ -6,7 +6,7 @@
 #include <pthread.h>
 
 #define MAX_SENSORES 1000
-#define MAX_LINHAS 1000000
+#define MAX_LINHAS 10000000
 
 typedef struct {
     char id[15];
