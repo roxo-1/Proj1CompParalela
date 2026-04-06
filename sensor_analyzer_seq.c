@@ -2,6 +2,7 @@
 Carolina Lee 10440304
 Enrique Cipolla 10427824
 Pedro Gabriel Guimarães Fernandes 10437465*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,17 +10,8 @@ Pedro Gabriel Guimarães Fernandes 10437465*/
 #include <time.h>
 
 #define MAX_SENSORES 1000
-#define MAX_LINHAS 10000000 
 
-// Estrutura para armazenar cada linha do log em memória 
-typedef struct {
-    char id[15];
-    char tipo[15];
-    double valor;
-    char status[10];
-} LogEntry;
-
-// Estrutura para estatísticas de cada sensor 
+// Estrutura para estatísticas de cada sensor
 typedef struct {
     char id[15];
     double soma_temp;
@@ -42,94 +34,123 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    LogEntry *logs = malloc(sizeof(LogEntry) * MAX_LINHAS);
-    if (!logs) {
-        printf("Erro de memória!\n");
-        return 1;
-    }
-
     SensorStats stats[MAX_SENSORES];
     memset(stats, 0, sizeof(stats));
 
     char line[150];
-    int total_lido = 0;
-    
-    // Início da medição de tempo 
+
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    printf("Lendo arquivo e processando dados...\n");
+    printf("Lendo e processando...\n");
 
-    while (fgets(line, sizeof(line), file) && total_lido < MAX_LINHAS) {
-        sscanf(line, "%s %*s %*s %s %lf status %s", 
-               logs[total_lido].id, logs[total_lido].tipo, 
-               &logs[total_lido].valor, logs[total_lido].status);
-        
-        int idx = atoi(&logs[total_lido].id[7]) - 1;
+    while (fgets(line, sizeof(line), file)) {
+        char *token;
+
+        char id[15], tipo[15], status[10];
+        double valor;
+
+        // Parsing rápido
+        token = strtok(line, " ");
+        if (!token) continue;
+        strcpy(id, token);
+
+        strtok(NULL, " ");
+        strtok(NULL, " ");
+
+        token = strtok(NULL, " ");
+        if (!token) continue;
+        strcpy(tipo, token);
+
+        token = strtok(NULL, " ");
+        if (!token) continue;
+        valor = atof(token);
+
+        strtok(NULL, " "); // "status"
+
+        token = strtok(NULL, " \n");
+        if (!token) continue;
+        strcpy(status, token);
+
+        // Converter ID -> índice
+        int idx = atoi(&id[7]) - 1;
         if (idx < 0 || idx >= MAX_SENSORES) continue;
 
-        strcpy(stats[idx].id, logs[total_lido].id);
-        stats[idx].ativo = 1;
+        SensorStats *s = &stats[idx];
 
-        // Processamento por tipo de sensor 
-        if (strcmp(logs[total_lido].tipo, "temperatura") == 0) {
-            stats[idx].soma_temp += logs[total_lido].valor;
-            stats[idx].soma_quadrados_temp += (logs[total_lido].valor * logs[total_lido].valor);
-            stats[idx].count_temp++;
-        } else if (strcmp(logs[total_lido].tipo, "energia") == 0) {
-            stats[idx].energia_total += logs[total_lido].valor;
+        strcpy(s->id, id);
+        s->ativo = 1;
+
+        // Processamento otimizado
+        if (tipo[0] == 't') { // temperatura
+            s->soma_temp += valor;
+            s->soma_quadrados_temp += valor * valor;
+            s->count_temp++;
+        } else if (tipo[0] == 'e') { // energia
+            s->energia_total += valor;
         }
 
-        // Contagem de alertas 
-        if (strcmp(logs[total_lido].status, "ALERTA") == 0 || 
-            strcmp(logs[total_lido].status, "CRITICO") == 0) {
-            stats[idx].total_alertas++;
+        // Alertas
+        if (status[0] == 'A' || status[0] == 'C') {
+            s->total_alertas++;
         }
-
-        total_lido++;
     }
 
-    // Análise Final 
+    fclose(file);
+
+    // Análise final
     double maior_desvio = -1.0;
     char sensor_instavel[15] = "";
     double consumo_total_energia = 0;
     int alertas_globais = 0;
 
     printf("\n--- RESULTADOS (TOP 10 SENSORES DE TEMPERATURA) ---\n");
+
     int exibidos = 0;
     for (int i = 0; i < MAX_SENSORES; i++) {
         if (!stats[i].ativo) continue;
 
         double media = 0, desvio = 0;
+
         if (stats[i].count_temp > 0) {
             media = stats[i].soma_temp / stats[i].count_temp;
-            // Fórmula incremental do desvio padrão 
             desvio = sqrt((stats[i].soma_quadrados_temp / stats[i].count_temp) - (media * media));
 
             if (exibidos < 10) {
-                printf("Sensor: %s | Média: %.2f°C | Desvio: %.2f\n", stats[i].id, media, desvio);
+                printf("Sensor: %s | Média: %.2f°C | Desvio: %.2f\n",
+                       stats[i].id, media, desvio);
                 exibidos++;
             }
 
             if (desvio > maior_desvio) {
                 maior_desvio = desvio;
-                strcpy(sensor_instavel, stats[i].id); 
+                strcpy(sensor_instavel, stats[i].id);
             }
         }
-        consumo_total_energia += stats[i].energia_total; 
-        alertas_globais += stats[i].total_alertas; 
+
+        consumo_total_energia += stats[i].energia_total;
+        alertas_globais += stats[i].total_alertas;
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-    double tempo_total = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    // Cálculo de tempo CORRETO (robusto)
+    long seconds = end.tv_sec - start.tv_sec;
+    long nanoseconds = end.tv_nsec - start.tv_nsec;
+
+    if (nanoseconds < 0) {
+        seconds--;
+        nanoseconds += 1000000000;
+    }
+
+    double tempo_total = seconds + nanoseconds / 1e9;
 
     printf("\n--- ESTATÍSTICAS GERAIS ---\n");
-    printf("Sensor mais instável: %s (Desvio Padrão: %.2f)\n", sensor_instavel, maior_desvio);
+    printf("Sensor mais instável: %s (Desvio Padrão: %.2f)\n",
+           sensor_instavel, maior_desvio);
     printf("Total de alertas (ALERTA/CRITICO): %d\n", alertas_globais);
     printf("Consumo total de energia: %.2f W\n", consumo_total_energia);
     printf("Tempo de execução: %.4f segundos\n", tempo_total);
 
-    free(logs);
-    fclose(file);
     return 0;
 }
