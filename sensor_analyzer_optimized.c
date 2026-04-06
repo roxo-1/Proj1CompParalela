@@ -10,7 +10,7 @@ Pedro Gabriel Guimarães Fernandes 10437465*/
 #include <pthread.h>
 
 #define MAX_SENSORES 1000
-#define MAX_LINHAS 10000000
+#define MAX_LINHAS 70000000
 
 typedef struct {
     char id[15];
