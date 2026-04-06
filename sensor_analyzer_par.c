@@ -10,7 +10,7 @@ Pedro Gabriel Guimarães Fernandes 10437465*/
 #include <pthread.h>
 
 #define MAX_SENSORES 1000
-#define MAX_LINHAS 10000000
+#define MAX_LINHAS 70000000
 
 typedef struct {
     char id[15];
@@ -33,65 +33,49 @@ typedef struct {
     int inicio;
     int fim;
     LogEntry *logs;
+    SensorStats local_stats[MAX_SENSORES]; 
 } ThreadArgs;
 
-// estrutura global final
+//  Estrutura global compartilhada
 SensorStats final_stats[MAX_SENSORES];
 
-// mutex apenas para merge
+//  Mutex global
 pthread_mutex_t mutex;
 
-// função da thread (SEM mutex no loop)
+// Função da thread COM mutex
+
+pthread_mutex_t mutex_stats;
+
 void* processar_bloco(void* arg) {
     ThreadArgs *data = (ThreadArgs*)arg;
 
-    // stats locais (cada thread tem o seu)
-    SensorStats local_stats[MAX_SENSORES];
-    memset(local_stats, 0, sizeof(local_stats));
-
-    // processamento sem lock
     for (int i = data->inicio; i < data->fim; i++) {
+
         int idx = atoi(&data->logs[i].id[7]) - 1;
         if (idx < 0 || idx >= MAX_SENSORES) continue;
 
-        SensorStats *s = &local_stats[idx];
+        pthread_mutex_lock(&mutex_stats);
+
+        SensorStats *s = &final_stats[idx];
 
         s->ativo = 1;
         strcpy(s->id, data->logs[i].id);
 
-        if (strcmp(data->logs[i].tipo, "temperatura") == 0) {
+        if (data->logs[i].tipo[0] == 't') { // temperatura
             s->soma_temp += data->logs[i].valor;
             s->soma_quadrados_temp += data->logs[i].valor * data->logs[i].valor;
             s->count_temp++;
-        } else if (strcmp(data->logs[i].tipo, "energia") == 0) {
+        } else if (data->logs[i].tipo[0] == 'e') { // energia
             s->energia_total += data->logs[i].valor;
         }
 
-        if (strcmp(data->logs[i].status, "ALERTA") == 0 ||
-            strcmp(data->logs[i].status, "CRITICO") == 0) {
+        if (data->logs[i].status[0] == 'A' || 
+            data->logs[i].status[0] == 'C') {
             s->total_alertas++;
         }
+
+        pthread_mutex_unlock(&mutex_stats);
     }
-
-    pthread_mutex_lock(&mutex);
-
-    for (int i = 0; i < MAX_SENSORES; i++) {
-        if (!local_stats[i].ativo) continue;
-
-        SensorStats *f = &final_stats[i];
-        SensorStats *l = &local_stats[i];
-
-        f->ativo = 1;
-        strcpy(f->id, l->id);
-
-        f->soma_temp += l->soma_temp;
-        f->soma_quadrados_temp += l->soma_quadrados_temp;
-        f->count_temp += l->count_temp;
-        f->energia_total += l->energia_total;
-        f->total_alertas += l->total_alertas;
-    }
-
-    pthread_mutex_unlock(&mutex);
 
     return NULL;
 }
@@ -143,10 +127,10 @@ int main(int argc, char *argv[]) {
 
     int chunk = total_lido / num_threads;
 
-    memset(final_stats, 0, sizeof(final_stats));
-    pthread_mutex_init(&mutex, NULL);
+    for (int i = 0; i < num_threads; i++) {
+        memset(t_args[i].local_stats, 0, sizeof(t_args[i].local_stats));
+    }
 
-    // criação das threads
     for (int i = 0; i < num_threads; i++) {
         t_args[i].inicio = i * chunk;
         t_args[i].fim = (i == num_threads - 1) ? total_lido : (i + 1) * chunk;
@@ -159,7 +143,23 @@ int main(int argc, char *argv[]) {
         pthread_join(threads[i], NULL);
     }
 
-    // resultados
+    SensorStats final_stats[MAX_SENSORES] = {0};
+
+    for (int t = 0; t < num_threads; t++) {
+        for (int i = 0; i < MAX_SENSORES; i++) {
+            if (!t_args[t].local_stats[i].ativo) continue;
+
+            final_stats[i].ativo = 1;
+            strcpy(final_stats[i].id, t_args[t].local_stats[i].id);
+
+            final_stats[i].soma_temp += t_args[t].local_stats[i].soma_temp;
+            final_stats[i].soma_quadrados_temp += t_args[t].local_stats[i].soma_quadrados_temp;
+            final_stats[i].count_temp += t_args[t].local_stats[i].count_temp;
+            final_stats[i].energia_total += t_args[t].local_stats[i].energia_total;
+            final_stats[i].total_alertas += t_args[t].local_stats[i].total_alertas;
+        }
+    }
+
     double maior_desvio = -1;
     char sensor_instavel[15] = "";
     double consumo_total = 0;
@@ -194,8 +194,6 @@ int main(int argc, char *argv[]) {
     printf("Total alertas: %d\n", alertas);
     printf("Consumo total: %.2f\n", consumo_total);
     printf("Tempo: %.4f segundos\n", tempo);
-
-    pthread_mutex_destroy(&mutex);
 
     free(logs);
     free(threads);
